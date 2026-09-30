@@ -6,6 +6,19 @@ Experimental Q1_0 execution support for **Hexagon HTP v81** in a
 This repository documents a runtime experiment. It does **not** claim that
 post-training quantizing an arbitrary LLM to one bit preserves model quality.
 
+## Repository contents
+
+- `docs/STAGE1.md` — implementation notes, validation commands, measurements,
+  and known limitations.
+- `patches/` — ordered, re-runnable patch scripts used to evolve Stage 1.
+  Review the target source and the patch order before applying them to another
+  llama.cpp revision.
+- `tests/q10_repack_unit.cpp` — host-side repack/inverse-repack regression
+  harness.
+- `probes/q10_probe_v3.cpp` — HTP-versus-CPU diagnostic probe.
+- `stage2/` — **not deployed** native-Q1_0 work: a kernel draft and its design
+  notes. It is retained for review and experimentation, not production use.
+
 ## Why it is useful
 
 The work separates two questions that are often conflated:
