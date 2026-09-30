@@ -1,11 +1,25 @@
-# Stage 2 — Kernel HVX natif Q1_0 (design, 30-09)
+# Stage 2 — Kernel HVX natif Q1_0 (recherche, non déployable)
+
+> **État au 2026-09-30 — HOLD.** Le code de cette directory est une note de
+> conception et un self-test hôte du format dense; il ne constitue ni un
+> kernel DSP validé ni une variante que l'on peut activer. Une tentative
+> d'intégration a révélé une incompatibilité de layout: la voie HVX Q4_0 lit
+> quatre vecteurs de 128 octets par k-tuile, alors qu'une tuile Q1 compacte ne
+> contient que 128 octets de bits. Répliquer les bits pour conserver ces quatre
+> lectures consommerait 512 octets, annulerait le bénéfice mémoire et a déjà
+> mené à des accès hors limites dans le prototype.
+
+> La voie correcte reste donc: **bits denses de 128 octets + expansion HVX
+> explicitement validée**, sans lire le format dense comme quatre vecteurs Q4.
+> Le Stage 1, qui repacke sans perte vers Q4_0 tiled, reste l'unique chemin
+> exécutable et testé.
 
 ## 0. Verdict du design
 
-Deux variantes possibles du microkernel 32x1. La **V1 (tuile Q4_0, compensée)**
-est recommandée : zéro nouveau layout, zéro changement de plomberie host,
-deux instructions de moins par k-tile que V2, et le pattern est déjà validé
-par notre Stage 1 (nibbles 7/9).
+Deux variantes existent. La **V1 (tuile Q4_0, compensée)** est le Stage 1
+actuel: elle est correcte, mais ne réduit pas le trafic. La V2 compacte est
+un objectif de recherche; aucun de ses pseudo-kernels ne doit être intégré
+avant le test de correspondance de permutation et les tests HTP.
 
 ## 1. Mathématique (stratégie B, validée par mul_mv_q1_0_f32_flat.cl Qualcomm)
 
@@ -108,16 +122,22 @@ dans le microkernel (déjà optimal) mais **dans le buffer** : ne plus stocker
 les poids en tuiles Q4_0 (576 o) mais en **Q1_0 packed (18 o/bloc de 128,
 soit 72 o/tuile 32×32 → réduction 8× du trafic poids DDR/VTCM**).
 
-## 3. Vrai gain Stage 2 : layout packed-native
+## 3. Vrai gain Stage 2 : layout packed-native (à reconstruire)
 
-Nouveau layout tuile `q1_0_tiled` : 32 rows × 32 cols de bits = 128 o de
-bits + 64 o scales f16 = 192 o/tuile (vs 576) → **3× moins de lectures
-poids**. Le microkernel unpack les bits → nibbles 7/9 **dans VTCM** (1
-valen/vshade) puis accum_4bit identique. Nouvelles pièces :
+Nouveau layout candidat `q1_0_tiled` : 32 rows × 32 cols de bits = 128 o de
+bits + 64 o scales f16 = 192 o/tuile (vs 576). Cela ne devient **3× moins de
+lectures poids** que si le DSP consomme vraiment ces 128 octets denses. Il ne
+faut pas les présenter au helper Q4_0 existant comme quatre vecteurs de
+nibbles: cette hypothèse requiert 512 octets et est invalide.
+
+Le microkernel devra donc dériver le mapping bit→lanes depuis
+`unpack_and_interleave_4bit_x2`, puis effectuer une expansion dense vérifiée
+en VTCM. Nouvelles pièces :
 - `repack_q1_0_native_tiled` : bits row-major par tuile 32×32 (128 o) +
   scales ; ~3 h de code.
-- `tiled_vec_dot_q1_0_native_32x1` : unpack bits (vlut/vdelta 4×) → 2
-  vecteurs nibble 7/9 → accum identique.
+- `tiled_vec_dot_q1_0_native_32x1` : expansion dense bit→lanes, avec une
+  preuve byte-à-byte contre le mapping Q4_0; pas de réemploi direct de
+  `vptr[0..3]`.
 - Host : `HTP_MM_WEIGHT_TILE_SIZE_Q1_0 = 192`, tiled_row_size, alloc.
 - Validation : test-backend-ops 32/32 (même filtre), bench Nanbeige
   (attendu : tg ↑ car BW poids /3 ; pp légèrement ↑).
@@ -126,9 +146,11 @@ valen/vshade) puis accum_4bit identique. Nouvelles pièces :
 
 1. **S2.1** (1-2 h) : microkernel V1 + dispatch (prouve la sémantique ±1,
    zéro gain perf attendu — déjà couvert par Stage 1) → tests.
-2. **S2.2** (1 jour) : layout packed-native (192 o) + repack + host wiring
-   → 32/32 → bench A/B vs Stage 1 (l'objectif : tg 15,42 → 20+ t/s si
-   BW-bound).
+2. **S2.2** : écrire un simulateur hôte du mapping
+   `unpack_and_interleave_4bit_x2`; il doit prouver que les 1 024 poids d'une
+   tuile sont lus une fois, sans lecture au-delà de 192 octets. Ensuite
+   seulement: repack, kernel, 32/32 et bench A/B. `20+ t/s` est une hypothèse
+   de benchmark, pas une prévision validée.
 3. **S2.3** : 27B feasibility avec le layout 192 o : 3,53 GiB × (1 + 192/
    (18·32)) ... recalc : poids tuilés 27B = 3,53 GiB × 192/576 = 1,18 GiB +
    buffers → TIENT sur device. C'est le déblocage 27B.
@@ -142,3 +164,17 @@ valen/vshade) puis accum_4bit identique. Nouvelles pièces :
 - Le dispatch actuel route Q1_0 via `wtype=Q4_0` (fix6) : le layout natif
   exigera un vrai type interne `HTP_TYPE_Q1_0_TILED` → attention aux
   switches (tile_size, src1_row_size inchangés côté act).
+- La PTQ Q1_0 naïve de Nanbeige reste inutilisable (PPL catastrophique): même
+  un kernel correct ne rend pas le format utile sans validation qualité,
+  idéalement per-tensor ou avec un modèle entraîné pour 1 bit.
+
+## 6. Critères de sortie du HOLD
+
+1. Le test hôte couvre le mapping HVX exact, les bornes et le padding.
+2. ASan/UBSan ou équivalent ne rapporte aucun accès hors limite dans repack et
+   simulateur.
+3. Les 32/32 tests HTP sont verts sur le chemin natif, et la sortie est
+   comparée au CPU.
+4. Le gain vitesse est mesuré à thermique et backend documentés.
+5. La qualité est comparée à Q4 sur la cible: Q1 reste opt-in tant que cette
+   validation n'est pas satisfaisante.

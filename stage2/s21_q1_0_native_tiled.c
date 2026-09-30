@@ -1,4 +1,11 @@
-// s21_q1_0_native_tiled.c — Stage 2.1/2.2 : kernel Q1_0 natif HVX (30-09)
+// s21_q1_0_native_tiled.c — Stage 2 : scaffold de recherche Q1_0 (30-09)
+//
+// STATUT: NON DEPLOYABLE. Le self-test hôte vérifie le format dense et la
+// sémantique ±1, mais la portion HVX est volontairement un skeleton. Ne pas
+// l'intégrer comme kernel: le mapping dense bit->lanes doit d'abord être
+// démontré byte-à-byte contre unpack_and_interleave_4bit_x2. En particulier,
+// une tuile de 128 octets de bits ne peut pas être lue comme vptr[0..3]
+// (quatre vecteurs de 128 octets) sans réplication ou dépassement de buffer.
 //
 // Resolution de la question laissee ouverte par stage2_kernel_draft.md §2 :
 //   « les nibbles 7/9 apres offset i8=8 donnent n-8 = ±1 exactement →
@@ -39,8 +46,8 @@
 // d = sum|x|/128, bit = x>0), repack natif, dot scalaire de reference, et
 // verification de parite du chemin "nibbles 7/9 + offset i8=8" (domaine
 // entier, exact). Le kernel HVX (garde __HVX__) est fourni pour la compile
-// hexagon-clang (-mhvx -mv81) et reprend les conventions d'appel du q4_0
-// tiled (vptr[4] scales, v_act[8] scale act, store via hvx_vec_store_u).
+// hexagon-clang (-mhvx -mv81) est seulement une signature de travail: il ne
+// valide ni le layout vectoriel ni les performances.
 
 #include <stdint.h>
 #include <stdio.h>
